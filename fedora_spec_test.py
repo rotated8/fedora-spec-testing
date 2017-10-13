@@ -2,10 +2,12 @@ import requests, pytest, re
 ROOT = 'http://127.0.0.1:8080/rest'
 PAYLOAD_HEADERS = ['Content-Length', 'Content-Range', 'Trailer', 'Transfer-Encoding'] # Via RFC 7231 3.3
 
-support_delete = pytest.mark.skipif('DELETE' not in requests.head(ROOT).headers['Allow'], reason='3.7 DELETE: (OPTIONAL) Delete method not supported')
+support_delete = pytest.mark.skipif('DELETE' not in requests.head(ROOT).headers['Allow'],
+        reason='3.7 DELETE: (OPTIONAL) Delete method not supported')
 
-@pytest.fixture
+@pytest.fixture(scope='module')
 def nodes():
+    """Ensures ROOT is accessible and nodes are deleted after testing"""
     # Ensure ROOT is accessible.
     r = requests.get(ROOT)
     assert r.status_code == 200, 'Fedora root not found. Is Fedora running at the ROOT url?'
@@ -17,8 +19,9 @@ def nodes():
         requests.delete(node)
         requests.delete(node + '/fcr:tombstone')
 
-@pytest.fixture
+@pytest.fixture(scope='module')
 def files():
+    """Provides a file for LDP-NR tests"""
     with open('./image.jpg', 'rb') as image:
         yield {'file': image}
 
@@ -107,7 +110,8 @@ def test_contained_desc(nodes):
     nodes.add(child)
 
     # LDP-RS returns contained descriptions when asked
-    r = requests.get(parent, headers={'Prefer': 'return=representation; include="http://w3.org/ns/oa#PreferContainedDescriptions"'})
+    includes = 'include="http://w3.org/ns/oa#PreferContainedDescriptions"'
+    r = requests.get(parent, headers={'Prefer': 'return=representation; ' + includes})
     assert re.search('ldp:contains\s*<' + child +'>', r.text) is not None
     assert re.search('fedora:hasParent\s*<' + parent + '>', r.text) is not None, '3.5.1 GET: (MAY) Contained descriptions missing from response'
 
@@ -123,7 +127,8 @@ def test_inbound_refs(nodes):
     nodes.add(child)
 
     # LDP-RS returns inbound references when asked
-    r = requests.get(child, headers={'Prefer': 'return=representation; include="http://fedora.info/definitions/fcrepo#PreferInboundReferences"'})
+    includes = 'include="http://fedora.info/definitions/fcrepo#PreferInboundReferences"'
+    r = requests.get(child, headers={'Prefer': 'return=representation; ' + includes})
     assert r.status_code == 200
     # TODO: how to test inbound refs?
     assert 0, '3.5.1 GET: (SHOULD) Inbound references missing from response'
@@ -218,7 +223,7 @@ def test_head_digest(nodes, files):
 # DELETE
 @support_delete
 def test_depth_zero(nodes):
-    # Set up
+    # Setup
     r = requests.post(ROOT)
     r.raise_for_status
     parent = r.headers['Location']
@@ -229,7 +234,6 @@ def test_depth_zero(nodes):
     nodes.add(child)
 
     # Support deletion with depth of zero
-    # TODO: Depth of zero only supported for LDP-NRs?
     # TODO: How to query for supported or default Depth values?
     r = requests.delete(parent, headers={'Depth': '0'})
     assert r.status_code == 204, '3.7.1 DELETE: Depth: 0 not supported'
@@ -240,7 +244,7 @@ def test_depth_zero(nodes):
 
 @support_delete
 def test_depth_infinity(nodes):
-    # Set up
+    # Setup
     r = requests.post(ROOT)
     r.raise_for_status
     parent = r.headers['Location']
@@ -261,3 +265,15 @@ def test_depth_infinity(nodes):
     assert r.status_code == 410
     r = requests.get(grandchild)
     assert r.status_code == 410
+
+@support_delete
+def test_unsupported_depth(nodes):
+    # Setup
+    r = requests.post(ROOT)
+    r.raise_for_status
+    ldp_rs = r.headers['Location']
+    nodes.add(ldp_rs)
+
+    # Bad Depth value returns 400
+    r = requests.delete(ldp_rs, headers={'Depth': 'forfty'})
+    assert r.status_code == 400, '3.7.1 DELETE: Using an unsupported Depth value should return 440'
